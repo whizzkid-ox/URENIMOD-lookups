@@ -1,0 +1,19 @@
+{
+    "name": "lookup_table_generation",
+    "description": "Generate lookup tables for NME fiber simulation",
+    "request": {
+        "resources": {
+            "cpus": 4,
+            "gpus": 0,
+            "cpuMemoryGb": 8,
+            "clusterId": 4
+        },
+        "docker": {
+            "image": "python:3.12-slim",
+            "command": "bash -c 'pip install neuron numpy scipy matplotlib tqdm colorlog && echo \"Container ready for file transfer\" && sleep 3600'"
+        },
+        "scheduling": {
+            "interactive": true
+        }
+    }
+}
