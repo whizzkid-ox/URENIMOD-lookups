@@ -1,0 +1,9 @@
+[2025-06-12 21:32:40] [INFO] Starting URENIMOD lookup table generation and retrieval
+[2025-06-12 21:32:40] [INFO] Log file: C:\Users\rsegawa\URENIMOD\proposal_1\scripts\lookups\logs\lookup_generation_20250612_213240.log
+[2025-06-12 21:32:40] [INFO] Submitting job to GPU lab...
+[2025-06-12 21:32:42] [INFO] Job submitted successfully with ID: 268beb96-ed43-412f-815e-77a37f187222
+[2025-06-12 21:32:42] [INFO] Monitoring job status...
+[2025-06-12 21:32:43] [INFO] Job status changed: UNKNOWN -> FAILED
+[2025-06-12 21:32:43] [ERROR] Job FAILED. Checking error information...
+[2025-06-12 21:32:45] [INFO] Debug information saved to: C:\Users\rsegawa\URENIMOD\proposal_1\scripts\lookups\logs\job_268beb96-ed43-412f-815e-77a37f187222_debug.txt
+[2025-06-12 21:32:46] [ERROR] Job failed. Please check the log files.

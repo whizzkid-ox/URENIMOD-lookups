@@ -1,0 +1,435 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{physics}
+\usepackage{siunitx}
+
+\title{Neuronal Mechanics Excitation (NME) Lookup Tables:\\Mathematical Formulation and Implementation}
+\author{Ryo Segawa}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+The Neuronal Mechanics Excitation (NME) lookup tables provide a comprehensive mapping between ultrasound stimulation parameters and neuronal response characteristics. This document details the mathematical formulations, input parameters, and output variables computed by the lookup table generation system implemented in \texttt{run\_lookups.py}.
+
+The system models the mechanotransduction process in unmyelinated nerve fibers under ultrasonic stimulation, incorporating:
+\begin{itemize}
+    \item Acoustic wave propagation and tissue deformation
+    \item Dynamic membrane capacitance and resistance changes
+    \item Hodgkin-Huxley type ionic channel kinetics (Sundt model)
+    \item Electrophysiological response calculations
+\end{itemize}
+
+\section{Input Parameters}
+
+The lookup table system accepts six primary input parameters that define the geometric, acoustic, and electrical conditions:
+
+\subsection{Geometric Parameters}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clcc}
+\toprule
+\textbf{Symbol} & \textbf{Description} & \textbf{Unit} & \textbf{Range} \\
+\midrule
+$D_0$ & Fiber outer diameter & m & $10^{-7}$ to $10^{-5}$ \\
+$d_0$ & Membrane wall thickness & m & $10^{-10}$ to $10^{-8}$ \\
+$L_0$ & Total fiber length & m & $10^{-4}$ to $10^{-2}$ \\
+$l_0$ & Section length & m & $L_0/N_{nodes}$ \\
+\bottomrule
+\end{tabular}
+\caption{Geometric input parameters for fiber morphology}
+\end{table}
+
+\subsection{Acoustic Parameters}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clcc}
+\toprule
+\textbf{Symbol} & \textbf{Description} & \textbf{Unit} & \textbf{Range} \\
+\midrule
+$f$ & Ultrasound frequency & Hz & $10^4$ to $2 \times 10^6$ \\
+$A$ & Ultrasound amplitude (pressure) & Pa & $10^2$ to $10^6$ \\
+\bottomrule
+\end{tabular}
+\caption{Acoustic stimulation parameters}
+\end{table}
+
+\subsection{Electrical Parameters}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clcc}
+\toprule
+\textbf{Symbol} & \textbf{Description} & \textbf{Unit} & \textbf{Range} \\
+\midrule
+$Q_m$ & Membrane charge density & nC/cm² & $-97$ to $+50$ \\
+\bottomrule
+\end{tabular}
+\caption{Electrical boundary conditions}
+\end{table}
+
+\section{Mathematical Formulation}
+
+\subsection{Acoustic Wave Propagation}
+
+The system models ultrasonic wave propagation through tissue using the linear wave equation. For a plane wave traveling in the positive direction:
+
+\begin{equation}
+P(x,t) = A \cos(kx - \omega t)
+\end{equation}
+
+where:
+\begin{align}
+k &= \frac{2\pi f}{c} \quad \text{(wave number)} \\
+\omega &= 2\pi f \quad \text{(angular frequency)} \\
+c &= \SI{1500}{m/s} \quad \text{(sound velocity in tissue)} \\
+\rho &= \SI{1000}{kg/m^3} \quad \text{(tissue density)}
+\end{align}
+
+\subsection{Mechanical Deformation}
+
+\subsubsection{Longitudinal Displacement}
+
+The instantaneous length displacement of fiber segment $i$ is calculated using:
+
+\begin{equation}
+\Delta l_i(t) = \frac{P_0}{\rho c \omega} \left[ \cos(k(i-1)l_i(0) - \omega T) - \cos(kil_i(0) - \omega T) \right]
+\end{equation}
+
+For the first segment ($i=1$), this simplifies to a piecewise function:
+
+\begin{equation}
+\Delta l_1(t) = \begin{cases}
+0 & \text{if } T \leq 0 \\
+\frac{P_0}{\rho c \omega}(-\cos(-\omega T) + 1) & \text{if } 0 < T \leq \frac{kl_0}{\omega} \\
+\frac{P_0}{\rho c \omega}(-\cos(-\omega T) + \cos(kl_0 - \omega T)) & \text{if } T > \frac{kl_0}{\omega}
+\end{cases}
+\end{equation}
+
+where $T$ is the time within the acoustic cycle.
+
+\subsubsection{Radial Displacement}
+
+The radial displacement maintains volume conservation:
+
+\begin{equation}
+\Delta d_i(t) = \frac{D_i(0)}{2} \left( \sqrt{\frac{l_i(0)}{l_i(0) + \Delta l_i(t)}} - 1 \right)
+\end{equation}
+
+\subsection{Dynamic Membrane Properties}
+
+\subsubsection{Membrane Capacitance}
+
+The instantaneous specific membrane capacitance is calculated using:
+
+\begin{equation}
+C_{m,i}(t) = C_{m,i}(0) \cdot \frac{\ln\left(\frac{D_i(0)}{D_i(0)-2d_i(0)}\right)}{\ln\left(\frac{D_i(0)+2\Delta d_i(t)}{D_i(0)-2d_i(0)}\right)} \cdot \frac{l_i(0)+\Delta l_i(t)}{l_i(0)}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item First term: resting capacitance
+    \item Second term: membrane thickness correction factor
+    \item Third term: surface area correction factor
+\end{itemize}
+
+\subsubsection{Membrane Resistance}
+
+The instantaneous membrane resistance follows:
+
+\begin{equation}
+R_{m,i}(t) = R_{m,i}(0) \cdot \frac{l_i(0)D_i(0)}{(l_i(0)+\Delta l_i(t))(D_i(0)+2\Delta d_i(t))} \cdot \frac{d_i(0)+\Delta d_i(t)}{d_i(0)}
+\end{equation}
+
+where the initial resistance is:
+
+\begin{equation}
+R_{m,i}(0) = \frac{\rho_m}{\pi l_i(0) D_i(0)}
+\end{equation}
+
+with $\rho_m = 1/g_{leak}$ being the membrane resistivity.
+
+\subsection{Membrane Voltage}
+
+The membrane voltage is calculated from the charge-capacitance relationship:
+
+\begin{equation}
+V_m(t) = \frac{Q_m}{C_m(t)}
+\end{equation}
+
+where $Q_m$ is in nC/cm² and $C_m(t)$ is in μF/cm², yielding $V_m$ in mV.
+
+\subsection{Ionic Channel Kinetics (Sundt Model)}
+
+The system incorporates Hodgkin-Huxley type kinetics using the Sundt model with four gating variables:
+
+\subsubsection{Gating Variables}
+
+\begin{align}
+\frac{dm}{dt} &= \alpha_m(V_m)(1-m) - \beta_m(V_m)m \\
+\frac{dh}{dt} &= \alpha_h(V_m)(1-h) - \beta_h(V_m)h \\
+\frac{dn}{dt} &= \alpha_n(V_m)(1-n) - \beta_n(V_m)n \\
+\frac{dl}{dt} &= \alpha_l(V_m)(1-l) - \beta_l(V_m)l
+\end{align}
+
+where:
+\begin{itemize}
+    \item $m$: Na⁺ activation gate
+    \item $h$: Na⁺ inactivation gate  
+    \item $n$: K⁺ activation gate
+    \item $l$: K⁺ inactivation gate
+\end{itemize}
+
+\subsubsection{Steady-State Values}
+
+\begin{equation}
+x_\infty(V_m) = \frac{\alpha_x(V_m)}{\alpha_x(V_m) + \beta_x(V_m)}
+\end{equation}
+
+for $x \in \{m, h, n, l\}$.
+
+\subsubsection{Ionic Currents}
+
+\begin{align}
+I_{Na} &= g_{Na} m^3 h (V_m - E_{Na}) \\
+I_{K} &= g_{K} n^4 l (V_m - E_K) \\
+I_{leak} &= g_{leak} (V_m - E_{leak})
+\end{align}
+
+\section{Output Variables}
+
+The lookup tables generate comprehensive output variables organized into several categories. Each lookup table entry contains all of the following variables computed for the given parameter combination:
+
+\subsection{Primary Electrophysiological Variables}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+$V$ & Mean membrane potential & mV \\
+$Rm$ & Mean membrane resistance & Ω·cm² \\
+$l_0$ & Section length & m \\
+$tcomp$ & Computation time & s \\
+\bottomrule
+\end{tabular}
+\caption{Primary electrophysiological and computational output variables}
+\end{table}
+
+\subsection{Ion Channel Gating Variables (Sundt Model)}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Range} \\
+\midrule
+$m$ & Na⁺ activation gate (steady-state) & [0, 1] \\
+$h$ & Na⁺ inactivation gate (steady-state) & [0, 1] \\
+$n$ & K⁺ activation gate (steady-state) & [0, 1] \\
+$l$ & K⁺ inactivation gate (steady-state) & [0, 1] \\
+\bottomrule
+\end{tabular}
+\caption{Ion channel gating variables at steady-state for mean membrane potential}
+\end{table}
+
+\subsection{Ionic Current Densities}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+$iNa$ & Sodium current density & mA/m² \\
+$iKd$ & Delayed rectifier K⁺ current density & mA/m² \\
+$iLeak$ & Leakage current density & mA/m² \\
+\bottomrule
+\end{tabular}
+\caption{Ionic current densities computed from Sundt model}
+\end{table}
+
+\subsection{Kinetic Rate Constants}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+\texttt{alpha\_m}, \texttt{beta\_m} & Na⁺ activation rates & s⁻¹ \\
+\texttt{alpha\_h}, \texttt{beta\_h} & Na⁺ inactivation rates & s⁻¹ \\
+\texttt{alpha\_n}, \texttt{beta\_n} & K⁺ activation rates & s⁻¹ \\
+\texttt{alpha\_l}, \texttt{beta\_l} & K⁺ inactivation rates & s⁻¹ \\
+\bottomrule
+\end{tabular}
+\caption{Forward and backward rate constants}
+\end{table}
+
+\subsection{Gate Velocities}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+\texttt{m\_velocity} & Na⁺ activation velocity & s⁻¹ \\
+\texttt{h\_velocity} & Na⁺ inactivation velocity & s⁻¹ \\
+\texttt{n\_velocity} & K⁺ activation velocity & s⁻¹ \\
+\texttt{l\_velocity} & K⁺ inactivation velocity & s⁻¹ \\
+\bottomrule
+\end{tabular}
+\caption{Time derivatives of gating variables}
+\end{table>
+
+\subsection{Ionic Currents}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+$I_{Na}$ & Sodium current density & mA/m² \\
+$I_{Kd}$ & Delayed rectifier K⁺ current & mA/m² \\
+$I_{leak}$ & Leakage current density & mA/m² \\
+\bottomrule
+\end{tabular}
+\caption{Ionic current densities}
+\end{table}
+
+\subsection{Computational Metadata}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{Variable} & \textbf{Description} & \textbf{Unit} \\
+\midrule
+$t_{comp}$ & Computation time & s \\
+\bottomrule
+\end{tabular}
+\caption{Performance metrics}
+\end{table}
+
+\section{Lookup Table Structure}
+
+\subsection{Dimensionality}
+
+The lookup tables are structured as 6-dimensional arrays with dimensions corresponding to:
+
+\begin{equation}
+\text{Shape} = [N_{D0}, N_{d0}, N_{L0}, N_f, N_A, N_Q]
+\end{equation}
+
+where $N_x$ represents the number of discrete values for parameter $x$.
+
+\subsection{Data Organization}
+
+Each lookup table contains:
+\begin{itemize}
+    \item \textbf{refs}: Dictionary of reference parameter arrays
+    \item \textbf{tables}: Dictionary of output variable arrays
+\end{itemize}
+
+\subsection{Access Pattern}
+
+For a given parameter combination $(D_0, d_0, L_0, f, A, Q_m)$, the lookup table returns:
+
+\begin{equation}
+\text{Output} = \text{Table}[\text{idx}_{D0}, \text{idx}_{d0}, \text{idx}_{L0}, \text{idx}_f, \text{idx}_A, \text{idx}_Q]
+\end{equation}
+
+where each index corresponds to the closest available parameter value.
+
+\section{Physical Constants and Model Parameters}
+
+\subsection{Tissue Properties}
+\begin{align}
+\rho &= \SI{1000}{kg/m^3} \quad \text{(tissue density)} \\
+c &= \SI{1500}{m/s} \quad \text{(sound velocity)} \\
+T &= \SI{35}{\celsius} \quad \text{(temperature)}
+\end{align}
+
+\subsection{Default Membrane Properties}
+\begin{align}
+C_{m0} &= \SI{1.0}{\micro F/cm^2} \quad \text{(resting capacitance)} \\
+g_{leak} &= \text{Sundt model value} \quad \text{(leakage conductance)}
+\end{align}
+
+\section{Computational Implementation}
+
+\subsection{Time Discretization}
+
+Each acoustic cycle is discretized into $N_{points} = 1000$ time points:
+
+\begin{equation}
+t_i = \frac{i}{N_{points}} \cdot T_{cycle}, \quad i = 0, 1, \ldots, N_{points}-1
+\end{equation}
+
+where $T_{cycle} = 1/f$ for non-zero frequencies.
+
+\subsection{Averaging}
+
+Output variables represent time-averaged quantities over one acoustic cycle:
+
+\begin{equation}
+\langle X \rangle = \frac{1}{N_{points}} \sum_{i=0}^{N_{points}-1} X(t_i)
+\end{equation}
+
+\section{Applications and Usage}
+
+The NME lookup tables enable:
+\begin{itemize}
+    \item Rapid parameter space exploration for ultrasonic neuromodulation
+    \item Real-time simulation of neuronal responses to acoustic stimulation
+    \item Optimization of stimulation parameters for specific therapeutic outcomes
+    \item Validation of mechanotransduction models against experimental data
+\end{itemize}
+
+\section{Validation and Accuracy}
+
+\subsection{Physical Constraints}
+
+The implementation includes safety checks for:
+\begin{itemize}
+    \item Non-negative geometric dimensions after deformation
+    \item Physically reasonable membrane properties
+    \item Stable numerical integration
+\end{itemize}
+
+\subsection{Convergence Criteria}
+
+Time discretization with 1000 points per cycle ensures:
+\begin{itemize}
+    \item Adequate sampling of rapid gating variable dynamics
+    \item Accurate representation of periodic acoustic forcing
+    \item Numerical stability of the integration scheme
+\end{itemize}
+
+\section{Conclusion}
+
+The NME lookup table system provides a comprehensive computational framework for modeling ultrasonic neuromodulation in unmyelinated nerve fibers. The mathematical formulations capture the essential physics of mechanotransduction while maintaining computational efficiency through pre-computed lookup tables.
+
+The system's modular design allows for systematic parameter studies and facilitates the development of closed-loop neuromodulation systems. Future enhancements may include incorporation of nonlinear tissue mechanics, temperature-dependent kinetics, and multi-fiber interactions.
+
+\end{document}

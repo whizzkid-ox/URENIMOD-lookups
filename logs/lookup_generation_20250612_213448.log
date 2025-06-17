@@ -1,0 +1,19 @@
+[2025-06-12 21:34:48] [INFO] Starting URENIMOD lookup table generation and retrieval
+[2025-06-12 21:34:48] [INFO] Log file: C:\Users\rsegawa\URENIMOD\proposal_1\scripts\lookups\logs\lookup_generation_20250612_213448.log
+[2025-06-12 21:34:48] [INFO] Submitting job to GPU lab...
+[2025-06-12 21:34:50] [INFO] Job submitted successfully with ID: 11a18e5e-4d24-4326-afba-4c8a91fcaafe
+[2025-06-12 21:34:50] [INFO] Monitoring job status...
+[2025-06-12 21:34:51] [INFO] Job status changed: UNKNOWN -> ASSIGNED
+[2025-06-12 21:34:52] [INFO] Job status changed: ASSIGNED -> STARTING
+[2025-06-12 21:34:53] [INFO] Job status changed: STARTING -> RUNNING
+[2025-06-12 21:34:53] [INFO] Job is RUNNING... (Check 2 of 300)
+[2025-06-12 21:35:54] [INFO] Job is RUNNING... (Check 3 of 300)
+[2025-06-12 21:36:56] [INFO] Job is RUNNING... (Check 4 of 300)
+[2025-06-12 21:37:57] [INFO] Job is RUNNING... (Check 5 of 300)
+[2025-06-12 21:38:58] [INFO] Job is RUNNING... (Check 6 of 300)
+[2025-06-12 21:39:59] [INFO] Job is RUNNING... (Check 7 of 300)
+[2025-06-12 21:41:01] [INFO] Job is RUNNING... (Check 8 of 300)
+[2025-06-12 21:42:01] [INFO] Job is RUNNING... (Check 9 of 300)
+[2025-06-12 21:43:03] [INFO] Job status changed: RUNNING -> FINISHED
+[2025-06-12 21:47:31] [WARNING] Maximum monitoring time exceeded. Please check the job status manually.
+[2025-06-12 21:47:31] [INFO] Command to check: gpulab-cli job 11a18e5e-4d24-4326-afba-4c8a91fcaafe
