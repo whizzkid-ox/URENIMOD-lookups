@@ -3,7 +3,7 @@
   "description": "Generate CSV parameters file for lookup table generation",
   "request": {
     "resources": {
-      "cpus": 16,
+      "cpus": 4,
       "gpus": 0,
       "cpuMemoryGb": 32
     },
