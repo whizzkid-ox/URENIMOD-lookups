@@ -5,8 +5,7 @@
     "resources": {
       "cpus": 16,
       "gpus": 0,
-      "cpuMemoryGb": 32,
-      "clusterId": 6
+      "cpuMemoryGb": 32
     },
     "docker": {
       "image": "python:3.12-slim",

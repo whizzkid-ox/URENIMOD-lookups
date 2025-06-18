@@ -20,10 +20,10 @@ def generate_parameters():
     fiber_length = np.array(1e-3)  # 0.4mm to 10mm, step 0.1mm (97 values)
     fiber_diameter = np.array([1e-6])                      # 1µm constant (1 value)
     membrane_thickness = np.array([1.4e-9])                # 1.4nm constant (1 value)
-    freq = np.arange(1e4, 2e6 + 1e4, 1e4)                 # 10kHz to 2MHz, step 10kHz 
-    # freq = np.array([500e3])                 # 10kHz to 2MHz, step 10kHz 
-    # amp = np.arange(100, 1e6 + 1e4, 1e4)                  # 100Pa to 1MPa, step 10kPa
-    amp = np.array([50e3])
+    # freq = np.arange(1e4, 2e6 + 1e4, 1e4)                 # 10kHz to 2MHz, step 10kHz 
+    freq = np.array([500e3])                 # 10kHz to 2MHz, step 10kHz 
+    amp = np.arange(100, 1e6 + 1e4, 1e4)                  # 100Pa to 1MPa, step 10kPa
+    # amp = np.array([50e3])
     charge = np.arange(-97, 50 + 1, 1)                    # -97 to 50 nC/cm² (148 values)
 
 #test
