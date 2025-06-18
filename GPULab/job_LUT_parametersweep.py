@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Auto Submit and Download Script for URENIMOD Lookup Tables
+Modified Auto Submit and Download Script for URENIMOD Lookup Tables
 
 This script:
-1. Submits the lookup table generation job to GPULab
-2. Monitors job progress (detects computation completion, not just container finish)
-3. Automatically downloads the generated pickle files to OneDrive
-4. Uses the SSH connection method we established
+1. Generates CSV file with parameter combinations
+2. Reads the CSV and submits lookup table jobs for each parameter set
+3. Monitors job progress and downloads results
 
-Key Features:
-- Handles Unicode errors in subprocess output (from emojis in gpulab-cli)
-- Detects computation completion by parsing logs (not waiting for container to finish)
-- GPULab containers stay "RUNNING" for 30 minutes after computation for file downloads
+Key Changes:
+- CSV generation followed by individual lookup jobs for each parameter set
+- Variable substitution in command instead of hardcoded values
+- Batch processing of multiple parameter combinations
 
 Author: Ryo Segawa
 Date: June 2025
@@ -23,33 +22,32 @@ import json
 import os
 import sys
 import re
+import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-class GPULabAutoDownloader:
+class GPULabMultiParameterProcessor:
     def __init__(self):
         self.cert_path = "C:\\Users\\rsegawa\\login_ilabt_imec_be_rsegawa@ugent.be.pem"
         self.project = "urenimod"
-        self.download_dir = "C:\\Users\\rsegawa\\OneDrive - UGent\\URENIMOD-data\\unmyelinated_axon"
-        self.job_file = "gpulab_lookup_with_auto_download.json"        # Ensure download directory exists
+        self.download_dir = "C:\\Users\\rsegawa\\OneDrive - UGent\\URENIMOD-data"
+        self.csv_job_file = "job_parameters_generation.json"
+        self.lookup_job_template_file = "job_LUT_auto_download.json"
+        self.csv_file_path = None
+        # Ensure download directory exists
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
         
-    def submit_job(self):
-        """Submit the lookup generation job to GPULab."""
+    def submit_job(self, job_content_str):
+        """Submit a job to GPULab."""
         
-        print("=== Submitting URENIMOD Lookup Table Job ===")
-        print(f"Job file: {self.job_file}")
+        print("=== Submitting Job ===")
         print(f"Project: {self.project}")
         
-        # Read the job file content and pipe it to gpulab-cli
         try:
-            with open(self.job_file, 'r') as f:
-                job_content = f.read()
-            
             cmd = f'gpulab-cli --cert "{self.cert_path}" submit --project={self.project}'
             
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, 
-                                  input=job_content, check=True)
+                                  input=job_content_str, check=True)
             job_id = result.stdout.strip()
             print(f"✅ Job submitted successfully!")
             print(f"🆔 Job ID: {job_id}")
@@ -59,7 +57,7 @@ class GPULabAutoDownloader:
             print(f"Error output: {e.stderr}")
             return None
         except Exception as e:
-            print(f"❌ Error reading job file: {e}")
+            print(f"❌ Error submitting job: {e}")
             return None
     
     def get_job_info(self, job_id):
@@ -72,14 +70,6 @@ class GPULabAutoDownloader:
             list_result = subprocess.run(list_cmd, shell=True, capture_output=True, text=True, 
                                        encoding='utf-8', errors='replace')
             
-            print(f"🔍 DEBUG: Jobs list output:")
-            print(f"Return code: {list_result.returncode}")
-            print(f"Output length: {len(list_result.stdout)} chars")
-            if list_result.stdout.strip():
-                print("--- START JOBS LIST ---")
-                print(list_result.stdout)
-                print("--- END JOBS LIST ---")
-              
             job_info = {}
             # Parse the jobs list to find our job and its status
             for line in list_result.stdout.split('\n'):
@@ -95,69 +85,22 @@ class GPULabAutoDownloader:
                         if potential_status.upper() in ['RUNNING', 'FINISHED', 'FAILED', 'PENDING', 'WAITING', 'CANCELLED']:
                             job_info['status'] = potential_status.upper()
                             print(f"🎯 Found status from list: '{potential_status.upper()}'")
-                              # Extract CID (Container ID) from the jobs list line
-                            # CID is typically in a dedicated column before STATUS
-                            try:
-                                # Find the CID column (usually 2nd to last or 3rd to last)
-                                for i, part in enumerate(parts):
-                                    if part.isdigit() and len(part) <= 3:  # CID is usually a short number
-                                        # Check if next part is the status
-                                        if i < len(parts) - 1 and parts[i + 1].upper() in ['RUNNING', 'FINISHED', 'FAILED', 'PENDING', 'WAITING', 'CANCELLED']:
-                                            # Note: This is cluster ID, not container ID - detailed job query will get the real container ID
-                                            job_info['cluster_id'] = part  
-                                            print(f"🎯 Extracted cluster ID from jobs list: '{part}'")
-                                            break
-                            except Exception as e:
-                                print(f"⚠️ Could not extract cluster ID from line: {e}")
-                            break            # Always try to get detailed job information for container and SSH info
+                        break
+            
+            # Get detailed job information for container and SSH info
             print("🔍 Getting detailed job information...")
             
-            # Method 1: Using cmd as list with environment fix for encoding
+            # Method with environment fix for encoding
             env = os.environ.copy()
             env['PYTHONIOENCODING'] = 'utf-8'
             env['LANG'] = 'en_US.UTF-8'
             
             cmd_list = ['gpulab-cli', '--cert', self.cert_path, 'jobs', job_id]
-            result1 = subprocess.run(cmd_list, capture_output=True, text=True, 
+            result = subprocess.run(cmd_list, capture_output=True, text=True, 
                                    encoding='utf-8', errors='replace', timeout=60, env=env)
             
-            print(f"🔍 Method 1 (cmd list with env) - Return code: {result1.returncode}, Output: {len(result1.stdout)} chars")
-            
-            # Method 2: Using shell=True with explicit command and chcp to change codepage
-            cmd_str = f'chcp 65001 >nul 2>&1 && gpulab-cli --cert "{self.cert_path}" jobs {job_id}'
-            result2 = subprocess.run(cmd_str, shell=True, capture_output=True, text=True, 
-                                   encoding='utf-8', errors='replace', timeout=60)
-            
-            print(f"🔍 Method 2 (shell with chcp) - Return code: {result2.returncode}, Output: {len(result2.stdout)} chars")
-            
-            # Method 3: Try redirecting stderr to capture all output
-            cmd_str3 = f'gpulab-cli --cert "{self.cert_path}" jobs {job_id} 2>&1'
-            result3 = subprocess.run(cmd_str3, shell=True, capture_output=True, text=True, 
-                                   encoding='utf-8', errors='replace', timeout=60)
-            
-            print(f"🔍 Method 3 (redirect stderr) - Return code: {result3.returncode}, Output: {len(result3.stdout)} chars")
-            
-            # Use the result with the most output
-            results = [(result1, "Method 1"), (result2, "Method 2"), (result3, "Method 3")]
-            result, method_name = max(results, key=lambda x: len(x[0].stdout))
-            print(f"🎯 Using {method_name} result")
-            
-            print(f"🔍 DEBUG: Individual job output:")
-            print(f"Return code: {result.returncode}")
-            print(f"Output length: {len(result.stdout)} chars")
-            print(f"Error length: {len(result.stderr)} chars")
-            if result.stdout.strip():
-                print("--- START INDIVIDUAL JOB ---")
-                print(result.stdout)
-                print("--- END INDIVIDUAL JOB ---")
-            if result.stderr.strip():
-                print("--- STDERR ---")
-                print(result.stderr)
-                print("--- END STDERR ---")
-            
-            # Always parse all available output for SSH info and status
+            # Parse all available output for SSH info and status
             all_output = result.stdout + "\n" + result.stderr
-            parsed_ssh_info = False
             
             for line in all_output.split('\n'):
                 line = line.strip()
@@ -167,55 +110,25 @@ class GPULabAutoDownloader:
                     print(f"🎯 Found status from job details: '{status.upper()}'")
                 elif line.startswith('SSH login::'):
                     # Extract container ID and SSH host from SSH login line
-                    # Format: ssh -i 'path' CONTAINER@HOST -oProxyCommand=...
-                    ssh_info = line.split(':', 2)[2].strip()  # Get everything after "SSH login::"
+                    ssh_info = line.split(':', 2)[2].strip()
                     
-                    import re
                     ssh_match = re.search(r"ssh -i '[^']*' ([A-Za-z0-9]+)@([a-z0-9.]+)", ssh_info)
                     if ssh_match:
                         container_id = ssh_match.group(1)
                         ssh_host = ssh_match.group(2)
                         job_info['container'] = container_id
                         job_info['ssh_host'] = ssh_host
-                        print(f"🎯 Extracted container ID from SSH login: '{container_id}'")
+                        print(f"🎯 Extracted container ID: '{container_id}'")
                         print(f"🎯 Extracted SSH host: '{ssh_host}'")
-                        parsed_ssh_info = True
                         break
-                    else:
-                        print(f"⚠️ Could not parse SSH login info: {ssh_info}")
             
-            if not parsed_ssh_info:
-                print("❌ Could not extract SSH info from detailed job output")
-                print("🔧 Trying alternative approach - checking stderr for complete output...")
-                
-                # Sometimes the full output is in stderr due to encoding issues
-                # Try to find SSH login info in stderr even if it has encoding errors
-                stderr_lines = result.stderr.split('\n')
-                for line in stderr_lines:
-                    if 'SSH login::' in line or 'ssh -i' in line:
-                        print(f"🎯 Found potential SSH line in stderr: {line}")
-                        import re
-                        ssh_match = re.search(r"ssh -i '[^']*' ([A-Za-z0-9]+)@([a-z0-9.]+)", line)
-                        if ssh_match:
-                            container_id = ssh_match.group(1)
-                            ssh_host = ssh_match.group(2)
-                            job_info['container'] = container_id
-                            job_info['ssh_host'] = ssh_host
-                            print(f"🎯 Extracted container ID from stderr: '{container_id}'")
-                            print(f"🎯 Extracted SSH host from stderr: '{ssh_host}'")
-                            parsed_ssh_info = True
-                            break
             # If we still don't have container info, try to derive it from job_id
             if 'container' not in job_info and job_info.get('status') in ['RUNNING', 'FINISHED']:
                 print("🔍 No container found in output, trying to derive from job ID...")
-                # GPULab often uses the first 8 characters of job ID as container identifier
                 derived_container = job_id[:8]
                 job_info['container'] = derived_container
-                # SSH host should be extracted from detailed job info - if not available, connection will fail
                 print(f"🎯 Using derived container ID: '{derived_container}'")
-                print("⚠️ Warning: SSH host not determined - connection may fail")
             
-            print(f"🔍 Final parsed job_info: {job_info}")
             return job_info
             
         except Exception as e:
@@ -254,11 +167,9 @@ class GPULabAutoDownloader:
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, 
                                   check=True, encoding='utf-8', errors='replace')
             print("✅ Job cancelled successfully!")
-            print("💡 This saves time - no need to wait for the 30-minute download window to expire")
             return True
         except subprocess.CalledProcessError as e:
             print(f"⚠️  Warning: Could not cancel job - {e}")
-            print("💡 Job will continue running for 30 minutes (download window)")
             return False
         except Exception as e:
             print(f"⚠️  Warning: Error cancelling job - {e}")
@@ -403,7 +314,7 @@ class GPULabAutoDownloader:
                     for log_line in recent_logs:
                         if log_line.strip():
                             print(f"   {log_line}")
-                      # Check for completion in the recent logs
+                    # Check for completion in the recent logs
                     if self.check_computation_complete(job_id):
                         print("✅ Computation completed! (Container still running for downloads)")
                         return True
@@ -412,38 +323,38 @@ class GPULabAutoDownloader:
             
             time.sleep(check_interval)
     
-    def download_via_scp(self, job_id):
-        """Download files using SCP with proper SSH ProxyCommand."""
+    def download_lookup_files(self, job_id):
+        """Download the generated lookup table files from a completed job."""
         
-        print(f"=== Downloading Files from Job {job_id[:8]} ===")
+        print(f"📥 Downloading lookup files from job {job_id[:8]}...")
         
         # Get job info to extract container details
         job_info = self.get_job_info(job_id)
         
         if 'container' not in job_info or 'ssh_host' not in job_info:
             print("❌ Could not extract container information from job")
-            print("Available job info:", job_info)
             return False
         
         container = job_info['container']
-        ssh_host = job_info['ssh_host']        
+        ssh_host = job_info['ssh_host']
+        
         print(f"📡 Container: {container}")
         print(f"🖥️  SSH Host: {ssh_host}")
         
         # Set up local download directory
-        local_lookup_dir = Path(self.download_dir) / "lookup_tables"
-        local_lookup_dir.mkdir(parents=True, exist_ok=True)        
-          # Generate the date-based remote directory path
-        from datetime import datetime
+        local_lookup_dir = Path(self.download_dir) / "lookup_tables" / "unmyelinated_axon"
+        local_lookup_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate the date-based remote directory path
         today = datetime.now()
         date_folder = f"{today.year:04d}{today.month:02d}{today.day:02d}"
-        remote_dir = f"/project_ghent/rsegawa/URENIMOD-lookups/NME/lookup_tables/unmyelinated_fiber_{date_folder}"        
+        remote_dir = f"/project_ghent/rsegawa/URENIMOD-lookups/NME/lookup_tables/unmyelinated_fiber_{date_folder}"
         
         print(f"🔍 Checking for files in {remote_dir}...")
         
         # Check for pickle files in the remote directory
         ssh_check_cmd = [
-            "ssh", 
+            "ssh",
             "-i", self.cert_path,
             "-o", f"ProxyCommand=ssh -i {self.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
             "-o", "StrictHostKeyChecking=no",
@@ -452,39 +363,33 @@ class GPULabAutoDownloader:
             f"ls -la {remote_dir}/*.pkl 2>/dev/null || echo 'No pkl files found'"
         ]
         
-        # Debug: Print the exact SSH command being used
-        self.print_ssh_command_debug(ssh_check_cmd)
-        
         try:
             result = subprocess.run(ssh_check_cmd, capture_output=True, text=True, timeout=45)
             
             print(f"🔍 SSH command output:")
-            print(f"STDOUT: {repr(result.stdout)}")
-            print(f"STDERR: {repr(result.stderr)}")
             print(f"Return code: {result.returncode}")
             
             # Check for SSH connection errors first
             if result.returncode != 0:
                 if "Permission denied" in result.stderr or "Permission denied" in result.stdout:
-                    print("🔐 SSH Permission Error Detected!")
-                    print("❌ Cannot connect to remote server - SSH key authentication failed")
+                    print("🔐 SSH Permission Error - cannot connect to remote server")
                     return False
                 elif "Connection" in result.stderr or "timeout" in result.stderr.lower():
-                    print("🌐 SSH Connection Error Detected!")
-                    print("❌ Cannot reach remote server - network/connection issue")
+                    print("🌐 SSH Connection Error - cannot reach remote server")
                     return False
-                elif "No such file or directory" in result.stdout:
-                    print("📁 Remote directory doesn't exist or no pickle files found")                    # Try to find files in alternative locations
+                elif "No such file or directory" in result.stdout or "No pkl files found" in result.stdout:
+                    print("📁 No pickle files found in expected directory")
+                    # Try to find files in alternative locations
                     print("🔍 Searching for pickle files in alternative locations...")
                     search_cmd = ssh_check_cmd[:-1] + ["find /project_ghent/rsegawa/URENIMOD-lookups -name '*.pkl' 2>/dev/null | head -5"]
                     search_result = subprocess.run(search_cmd, capture_output=True, text=True, timeout=30)
                     if search_result.returncode == 0 and search_result.stdout.strip():
-                        print(f"� Found pickle files elsewhere:")
+                        print(f"🎯 Found pickle files elsewhere:")
                         print(search_result.stdout)
                         # Use the first file found for download
                         first_file = search_result.stdout.strip().split('\n')[0]
-                        pkl_files = [first_file]
-                        print(f"� Will download: {first_file}")
+                        pkl_files = [(first_file, first_file.split('/')[-1])]
+                        print(f"🎯 Will download: {first_file}")
                     else:
                         print("❌ No pickle files found in the entire project directory")
                         return False
@@ -499,16 +404,17 @@ class GPULabAutoDownloader:
                 
                 # Handle different cases of "no files found"
                 no_files_indicators = [
-                    "No pkl files found",  # Our custom message
-                    "No such file or directory",  # Standard shell error
-                    "cannot access",  # Another common error
-                ]                
-                has_pkl_files = (stdout_clean and 
+                    "No pkl files found",
+                    "No such file or directory",
+                    "cannot access",
+                ]
+                has_pkl_files = (stdout_clean and
                                not any(indicator in result.stdout for indicator in no_files_indicators) and
                                ".pkl" in result.stdout)
                 
                 if not has_pkl_files:
-                    print("❌ No pickle files detected in expected directory")                    # Try alternative search
+                    print("❌ No pickle files detected in expected directory")
+                    # Try alternative search
                     print("🔍 Searching for pickle files in alternative locations...")
                     search_cmd = ssh_check_cmd[:-1] + ["find /project_ghent/rsegawa/URENIMOD-lookups -name '*.pkl' 2>/dev/null | head -5"]
                     search_result = subprocess.run(search_cmd, capture_output=True, text=True, timeout=30)
@@ -519,7 +425,7 @@ class GPULabAutoDownloader:
                         found_files = search_result.stdout.strip().split('\n')
                         pkl_files = []
                         for full_path in found_files:
-                            if full_path.strip():                                # Store as tuple: (full_path, filename)
+                            if full_path.strip():
                                 filename = full_path.split('/')[-1]
                                 pkl_files.append((full_path, filename))
                                 print(f"📥 Will download: {filename} from {full_path}")
@@ -529,7 +435,7 @@ class GPULabAutoDownloader:
                 else:
                     print("📁 Available files:")
                     print(result.stdout)
-                      # Extract filenames from ls output (these are regular files, just filenames)
+                    # Extract filenames from ls output
                     pkl_files = []
                     for line in result.stdout.split('\n'):
                         if '.pkl' in line and not line.startswith('total'):
@@ -537,7 +443,6 @@ class GPULabAutoDownloader:
                             parts = line.split()
                             if len(parts) >= 9:
                                 filename = ' '.join(parts[8:])  # Handle filenames with spaces
-                                # Just store the filename, not the full path since we already have remote_dir
                                 if '/' in filename:
                                     filename = filename.split('/')[-1]  # Get just the filename part
                                 # Store as tuple: (None, filename) - None means use remote_dir
@@ -555,8 +460,9 @@ class GPULabAutoDownloader:
         except Exception as e:
             print(f"❌ SSH check failed: {e}")
             return False
-          # Download each pickle file using SCP
-        downloaded_count = 0        
+        
+        # Download each pickle file using SCP
+        downloaded_count = 0
         for pkl_item in pkl_files:
             # Handle both tuple format (full_path, filename) and string format
             if isinstance(pkl_item, tuple):
@@ -576,7 +482,8 @@ class GPULabAutoDownloader:
             
             local_path = local_lookup_dir / local_filename
             
-            scp_cmd = [                "scp",
+            scp_cmd = [
+                "scp",
                 "-i", self.cert_path,
                 "-o", f"ProxyCommand=ssh -i {self.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
                 "-o", "StrictHostKeyChecking=no",
@@ -615,291 +522,381 @@ class GPULabAutoDownloader:
         if downloaded_count > 0:
             print(f"\n🎉 Successfully downloaded {downloaded_count} file(s) to:")
             print(f"📁 {local_lookup_dir}")
-              # List all downloaded files
-            print("\n📋 Downloaded lookup tables:")
-            for pkl_file in local_lookup_dir.glob("*.pkl"):
-                size = pkl_file.stat().st_size
-                mod_time = datetime.fromtimestamp(pkl_file.stat().st_mtime)
-                print(f"   📦 {pkl_file.name} ({size} bytes, {mod_time.strftime('%Y-%m-%d %H:%M')})")
-            
             return True
         else:
             print("❌ No files were successfully downloaded")
             return False
+        
+        # Now monitor until computation completion
+        print("📊 Monitoring job progress...")
+        
+        while True:
+            status = self.get_job_status(job_id)
+            elapsed = int((time.time() - start_time) / 60)
+            
+            print(f"[{elapsed:02d}min] Job status: {status}")
+            
+            if status == "FINISHED":
+                print("✅ Job completed successfully!")
+                return True
+            elif status in ["FAILED", "CANCELLED", "ERROR"]:
+                print(f"❌ Job failed with status: {status}")
+                return False
+            elif status == "RUNNING":
+                # Check if computation is complete by analyzing logs
+                if self.check_computation_complete(job_id):
+                    print("✅ Computation completed!")
+                    return True
+            elif time.time() - start_time > timeout_seconds:
+                print(f"⏰ Job timeout after {timeout_minutes} minutes")
+                return False
+            
+            time.sleep(check_interval)
     
-    def run_complete_workflow(self):
-        """Run the complete workflow: submit job, wait for completion, download files."""
+    def check_csv_completion(self, job_id):
+        """Check if CSV file has been generated."""
+        logs = self.get_job_logs(job_id)
+        if not logs:
+            return False, None
         
-        print("🚀 Starting URENIMOD Lookup Table Auto-Generation and Download")
-        print("=" * 60)
+        print(f"🔍 Checking logs for CSV completion...")
         
-        # Step 1: Submit job
-        job_id = self.submit_job()
-        if not job_id:
-            print("❌ Workflow failed at job submission")
-            return False
-          # Step 2: Wait for completion (computation typically takes 3-5 minutes)
-        completed = self.wait_for_completion(job_id, timeout_minutes=15)
-        if not completed:
-            print("❌ Workflow failed - job did not complete successfully")
-            print("💡 You can still try to download manually if job is running:")
-            print(f"   gpulab-cli --cert \"{self.cert_path}\" ssh {job_id[:8]}")
-            return False
-          # Step 3: Download files
-        print("\n" + "=" * 40)
-        downloaded = self.download_via_scp(job_id)
+        # Look for completion indicators in the logs
+        csv_markers = [
+            "CSV generation completed!",
+            "CSV test completed!",
+            "lookup_parameters_",
+            ".csv"
+        ]
         
-        if downloaded:
-            print("\n🎉 WORKFLOW COMPLETED SUCCESSFULLY!")
-            print("✅ Lookup tables generated and downloaded")
-            print(f"📁 Files available at: {self.download_dir}")
+        # Check if we have the basic completion markers
+        has_completion = any(marker in logs for marker in ["CSV generation completed!", "CSV test completed!"])
+        has_csv_file = "lookup_parameters_" in logs and ".csv" in logs
+        
+        print(f"   Has completion marker: {has_completion}")
+        print(f"   Has CSV file reference: {has_csv_file}")
+        
+        if has_completion and has_csv_file:
+            print("✅ CSV generation detected as complete")
+            # Extract CSV file path from logs
+            for line in logs.split('\n'):
+                if 'lookup_parameters_' in line and '.csv' in line:
+                    # Try to extract the full path
+                    if '/project_ghent/rsegawa/URENIMOD-lookups/params_csv_test/' in line:
+                        csv_path = line.strip()
+                        print(f"   Found CSV path in logs: {csv_path}")
+                        return True, csv_path
             
-            # Cancel the job to avoid waiting for the 30-minute timeout            print("\n" + "=" * 40)
-            cancelled = self.cancel_job(job_id)
-            if cancelled:
-                print("✅ Job cancelled - no need to wait for timeout!")
-            else:
-                print("⚠️  Job continues running for 30 minutes (download window)")
-            
-            print("\n💡 You can now use these lookup tables in your URENIMOD research!")
-            return True
-        else:
-            print("\n⚠️  Job completed but download failed")
-            
-            # Run diagnostics to help troubleshoot the issue
-            self.diagnose_download_issues(job_id)
-            
-            print("\n💡 Manual download options:")
-            print(f"1. SSH: gpulab-cli --cert \"{self.cert_path}\" ssh {job_id[:8]}")
-            print(f"2. Check logs: gpulab-cli --cert \"{self.cert_path}\" log {job_id[:8]}")
-            return False
-
-    def test_ssh_connection(self, container, ssh_host):
-        """Test SSH connectivity to the container before attempting file operations."""
+            # If we found completion but no specific path, still return True
+            print("   CSV completed but no specific path found in logs")
+            return True, None
         
-        print("🔧 Testing SSH connection...")
+        # Also check for the specific file listing command output
+        if "Generated CSV file:" in logs or "/project_ghent/rsegawa/URENIMOD-lookups/params_csv_test/lookup_parameters_" in logs:
+            print("✅ CSV file found in logs")
+            return True, None
         
-        ssh_test_cmd = [
-            "ssh", 
+        return False, None
+    
+    def get_csv_file_path(self, job_id):
+        """Get the path to the generated CSV file on the server."""
+        
+        print(f"🔍 Looking for CSV file from job {job_id[:8]}...")
+        
+        # The CSV file should be at a predictable location
+        today = datetime.now().strftime("%Y%m%d")
+        expected_csv_path = f"/project_ghent/rsegawa/URENIMOD-lookups/params_csv_test/lookup_parameters_{today}.csv"
+        
+        print(f"📁 Expected CSV path: {expected_csv_path}")
+        return expected_csv_path
+    
+    def generate_lookup_job_config(self, params, csv_file_path):
+        """Generate job configuration for a specific parameter set."""
+        
+        # Read the template job file
+        with open(self.lookup_job_template_file, 'r') as f:
+            job_template = json.load(f)
+        
+        # Extract parameters
+        fiber_length = params['fiber_length']
+        fiber_diameter = params['fiber_diameter']
+        membrane_thickness = params['membrane_thickness']
+        freq = params['freq']
+        amp = params['amp']
+        charge = params['charge']
+        
+        # Create parameter-specific job name
+        job_name = f"lookup_fl{fiber_length:.1e}_fd{fiber_diameter:.1e}_freq{freq:.1e}_amp{amp:.1e}_ch{charge:.1f}"
+        job_template['name'] = job_name
+        
+        # Modify the command to use variables instead of hardcoded values
+        original_command = job_template['request']['docker']['command']
+        
+        # Replace the hardcoded python run_lookups.py command with parameterized version
+        new_command = original_command.replace(
+            'python run_lookups.py -fiber_length 1e-3 -fiber_diameter 1e-6 -membrane_thickness 1.4e-9 -freq 1e6 -amp 1e6 -charge -65.0',
+            f'python run_lookups.py -fiber_length {fiber_length} -fiber_diameter {fiber_diameter} -membrane_thickness {membrane_thickness} -freq {freq} -amp {amp} -charge {charge}'
+        )
+        
+        job_template['request']['docker']['command'] = new_command
+        
+        return job_template
+    
+    def read_csv_from_server_via_ssh(self, csv_job_id, csv_file_path):
+        """Read CSV file directly from server via SSH and return the parameter data."""
+        
+        print(f"📊 Reading CSV file from server: {csv_file_path}")
+        
+        # Get job info to extract container details from the CSV job
+        job_info = self.get_job_info(csv_job_id)
+        
+        if 'container' not in job_info:
+            print("❌ Could not extract container information from CSV job")
+            return None
+        
+        container = job_info['container']
+        ssh_host = job_info.get('ssh_host', 'default.gpulab.ilabt.imec.be')
+        
+        # Read CSV file via SSH
+        ssh_cmd = [
+            "ssh",
             "-i", self.cert_path,
             "-o", f"ProxyCommand=ssh -i {self.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
             "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=10",
             f"{container}@{ssh_host}",
-            "echo 'SSH connection test successful'"
+            f"cat {csv_file_path}"
         ]
         
         try:
-            result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=60)
             
-            if result.returncode == 0 and "SSH connection test successful" in result.stdout:
-                print("✅ SSH connection test passed")
-                return True
+            if result.returncode == 0 and result.stdout.strip():
+                csv_content = result.stdout.strip()
+                print(f"✅ Successfully read CSV file ({len(csv_content)} characters)")
+                
+                # Parse CSV content
+                import io
+                import pandas as pd
+                
+                df = pd.read_csv(io.StringIO(csv_content))
+                print(f"📊 Loaded {len(df)} parameter combinations from server")
+                return df
             else:
-                print("❌ SSH connection test failed")
-                print(f"   Return code: {result.returncode}")
-                print(f"   STDOUT: {repr(result.stdout)}")
-                print(f"   STDERR: {repr(result.stderr)}")
-                
-                # Provide specific guidance based on error type
-                if "Permission denied" in result.stderr:
-                    print("\n🔐 SSH Authentication Issue:")
-                    print("   - Check if your SSH key file exists and has correct permissions")
-                    print(f"   - Key path: {self.cert_path}")
-                    print("   - The key should be readable only by you (600 permissions on Unix)")
-                elif "Connection" in result.stderr or "timeout" in result.stderr.lower():
-                    print("\n🌐 Network/Connection Issue:")
-                    print("   - Check your internet connection")
-                    print("   - The container might not be running anymore")
-                    print("   - Try running the job status command to verify")
-                elif "Host key verification failed" in result.stderr:
-                    print("\n🔑 Host Key Issue:")
-                    print("   - You may need to accept the host key manually first")
-                    print("   - Try connecting manually once to accept the key")
-                
-                return False
+                print(f"❌ Failed to read CSV file from server")
+                if result.stderr:
+                    print(f"   Error: {result.stderr}")
+                return None
                 
         except subprocess.TimeoutExpired:
-            print("⏰ SSH connection test timed out")
-            print("   This could indicate network issues or the container being unresponsive")
-            return False
+            print(f"⏰ SSH read timed out")
+            return None
         except Exception as e:
-            print(f"❌ SSH connection test failed with error: {e}")
+            print(f"❌ Error reading CSV file via SSH: {e}")
+            return None
+    
+    def run_complete_workflow(self):
+        """Run the complete workflow: generate CSV, then process each parameter set."""
+        
+        print("🚀 Starting URENIMOD Multi-Parameter Lookup Table Generation")
+        print("=" * 70)
+        
+        # Step 1: Submit CSV generation job
+        print("\nStep 1: Generating parameters CSV file")
+        print("-" * 40)
+        
+        with open(self.csv_job_file, 'r') as f:
+            csv_job_content = f.read()
+        
+        csv_job_id = self.submit_job(csv_job_content)
+        if not csv_job_id:
+            print("❌ Workflow failed at CSV job submission")
             return False
 
-    def diagnose_download_issues(self, job_id):
-        """Diagnose potential issues preventing successful file downloads."""
+        # Wait for CSV file generation
+        print("⏳ Waiting for CSV file generation...")
+        start_time = time.time()
+        csv_path = None
+        check_count = 0
         
-        print("\n🔍 Running diagnostic checks...")
-        
-        # Check 1: Verify job is still running/accessible
-        print("1️⃣ Checking job status...")
-        job_info = self.get_job_info(job_id)
-        
-        if not job_info:
-            print("❌ Cannot retrieve job information - job may have been terminated")
-            return
-        
-        status = job_info.get('status', 'UNKNOWN')
-        print(f"   Job Status: {status}")
-        
-        if status not in ['RUNNING', 'COMPLETED']:
-            print(f"⚠️  Job is in '{status}' state - this may prevent SSH access")
-            print("💡 Consider rerunning the job if files are needed")
-            return
-          # Check 2: Test basic connectivity
-        if 'container' in job_info and 'ssh_host' in job_info:
-            container = job_info['container']
-            ssh_host = job_info['ssh_host']
-            print("2️⃣ Testing SSH connectivity...")
+        while time.time() - start_time < 600:  # 10 minutes timeout
+            check_count += 1
+            elapsed = int((time.time() - start_time) / 60)
             
-            if self.test_ssh_connection(container, ssh_host):
-                print("✅ SSH connectivity is working")
-                  # Check 3: Verify remote directory structure
-                print("3️⃣ Checking remote directory structure...")
-                
-                ssh_cmd = [
-                    "ssh", 
-                    "-i", self.cert_path,
-                    "-o", f"ProxyCommand=ssh -i {self.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
-                    "-o", "StrictHostKeyChecking=no",
-                    f"{container}@{ssh_host}",
-                    "find /project_ghent/rsegawa -type d -name '*URENIMOD*' 2>/dev/null | head -5"
-                ]
-                
-                try:
-                    result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
-                    if result.stdout.strip():
-                        print("✅ Found URENIMOD directories:")
-                        print(result.stdout)
-                    else:
-                        print("⚠️  No URENIMOD directories found in /project_ghent/rsegawa/")
-                        print("💡 The computation may not have completed or files may be elsewhere")
-                except Exception as e:
-                    print(f"❌ Directory check failed: {e}")
+            print(f"\n[{elapsed:02d}min] Check #{check_count}: Looking for CSV completion...")
+            
+            # Check job status first
+            status = self.get_job_status(csv_job_id)
+            print(f"   Job Status: {status}")
+            
+            completed, csv_remote_path = self.check_csv_completion(csv_job_id)
+            if completed:
+                print("✅ CSV file generation detected as complete!")
+                # Get the CSV file path on server
+                csv_path = self.get_csv_file_path(csv_job_id)
+                break
             else:
-                print("❌ SSH connectivity issues detected - see above for troubleshooting")
+                print(f"   CSV not yet complete, waiting 15 seconds...")
+                # Show recent logs to debug
+                logs = self.get_job_logs(csv_job_id)
+                if logs:
+                    recent_logs = logs.split('\n')[-3:]  # Last 3 lines
+                    print(f"   Recent logs:")
+                    for log_line in recent_logs:
+                        if log_line.strip():
+                            print(f"     {log_line}")
+                else:
+                    print(f"     No logs available yet")
+            
+            time.sleep(15)
+        else:
+            elapsed = int((time.time() - start_time) / 60)
+            print(f"\n❌ CSV file generation timed out after {elapsed} minutes")
+            # Show final logs for debugging
+            logs = self.get_job_logs(csv_job_id)
+            if logs:
+                print("Final logs:")
+                final_logs = logs.split('\n')[-10:]  # Last 10 lines
+                for log_line in final_logs:
+                    if log_line.strip():
+                        print(f"   {log_line}")
+            return False
+
+        if not csv_path:
+            print("❌ Failed to get CSV file path")
+            return False
+
+        # Step 2: Read CSV file from server and process each parameter set
+        print(f"\nStep 2: Reading parameter combinations from server")
+        print(f"CSV path on server: {csv_path}")
+        print("-" * 40)
         
-        print("\n💡 If issues persist, try:")
-        print(f"   • Manual SSH: gpulab-cli --cert \"{self.cert_path}\" ssh {job_id[:8]}")
-        print(f"   • Check logs: gpulab-cli --cert \"{self.cert_path}\" log {job_id[:8]}")
-        print("   • Verify the job has completed computation (not just running)")
-    
-    def print_ssh_command_debug(self, ssh_cmd):
-        """Print the exact SSH command for debugging purposes."""
-        print("🔧 DEBUG: SSH Command being executed:")
-        print("   " + " ".join(f'"{arg}"' if " " in arg else arg for arg in ssh_cmd))
-        print()
+        # Read CSV directly from server via SSH
+        df = self.read_csv_from_server_via_ssh(csv_job_id, csv_path)
+        if df is None:
+            print("❌ Failed to read CSV file from server")
+            return False
+        
+        # Show sample of parameters
+        print("\nSample parameters:")
+        print(df.head())
+
+        # Cancel CSV job since we don't need it anymore
+        print("\nCancelling CSV generation job...")
+        self.cancel_job(csv_job_id)
+
+        # Step 3: Process each parameter set
+        print(f"\nStep 3: Processing {len(df)} parameter combinations")
+        print("-" * 40)
+        
+        successful_jobs = 0
+        failed_jobs = 0
+        
+        for idx, params in df.iterrows():
+            print(f"\n🔄 Processing parameter set {idx + 1}/{len(df)}")
+            print(f"   fiber_length={params['fiber_length']:.1e}, fiber_diameter={params['fiber_diameter']:.1e}")
+            print(f"   membrane_thickness={params['membrane_thickness']:.1e}, freq={params['freq']:.1e}")
+            print(f"   amp={params['amp']:.1e}, charge={params['charge']:.1f}")
+            
+            # Generate job configuration for this parameter set
+            job_config = self.generate_lookup_job_config(params, csv_path)
+            job_content = json.dumps(job_config, indent=2)
+            
+            # Submit the job
+            job_id = self.submit_job(job_content)
+            if not job_id:
+                print(f"❌ Failed to submit job for parameter set {idx + 1}")
+                failed_jobs += 1
+                continue
+            
+            # Wait for completion with shorter timeout for individual jobs
+            print(f"⏳ Waiting for job {job_id[:8]} to complete...")
+            completed = self.wait_for_completion(job_id, timeout_minutes=20)
+            
+            if completed:
+                print(f"✅ Parameter set {idx + 1} completed successfully")
+                
+                # Download the generated lookup files
+                print(f"📥 Downloading lookup files for parameter set {idx + 1}...")
+                download_success = self.download_lookup_files(job_id)
+                
+                if download_success:
+                    print(f"✅ Lookup files downloaded successfully for parameter set {idx + 1}")
+                    successful_jobs += 1
+                else:
+                    print(f"⚠️  Parameter set {idx + 1} completed but download failed")
+                    # Still count as successful since computation completed
+                    successful_jobs += 1
+                
+                # Cancel job to free resources
+                self.cancel_job(job_id)
+            else:
+                print(f"❌ Parameter set {idx + 1} failed or timed out")
+                failed_jobs += 1
+                # Try to cancel failed job
+                self.cancel_job(job_id)
+            
+            # Small delay between jobs to avoid overwhelming the system
+            if idx < len(df) - 1:  # Don't sleep after the last job
+                print("⏸️  Waiting 30 seconds before next job...")
+                time.sleep(30)
+
+        # Step 4: Summary
+        print(f"\n🎉 MULTI-PARAMETER WORKFLOW COMPLETED!")
+        print("=" * 50)
+        print(f"✅ Successful jobs: {successful_jobs}")
+        print(f"❌ Failed jobs: {failed_jobs}")
+        print(f"📊 Total processed: {successful_jobs + failed_jobs}/{len(df)}")
+        
+        if successful_jobs > 0:
+            print(f"📁 Lookup tables generated and downloaded to:")
+            print(f"   {self.download_dir}\\lookup_tables\\unmyelinated_axon\\")
+            print(f"💡 You can now use these lookup tables in your URENIMOD research!")
+            
+            # List downloaded files
+            lookup_dir = Path(self.download_dir) / "lookup_tables" / "unmyelinated_axon"
+            if lookup_dir.exists():
+                pkl_files = list(lookup_dir.glob("*.pkl"))
+                if pkl_files:
+                    print(f"\n📋 Downloaded lookup table files ({len(pkl_files)} files):")
+                    for pkl_file in pkl_files:
+                        size = pkl_file.stat().st_size
+                        mod_time = datetime.fromtimestamp(pkl_file.stat().st_mtime)
+                        print(f"   📦 {pkl_file.name} ({size} bytes, {mod_time.strftime('%H:%M')})")
+            
+            return True
+        else:
+            print("⚠️  No jobs completed successfully")
+            return False
 
 def main():
-    """Main function to run the auto-downloader."""
+    """Main function to run the multi-parameter processor."""
     
     # Change to the script directory
     script_dir = Path(__file__).parent
     os.chdir(script_dir)
     
-    print("=== URENIMOD Lookup Table Auto-Generator ===")
+    print("=== URENIMOD Multi-Parameter Lookup Table Generator ===")
     print(f"Working directory: {script_dir}")
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # Check if job file exists
-    if not Path("gpulab_lookup_with_auto_download.json").exists():
-        print("❌ Job file 'gpulab_lookup_with_auto_download.json' not found!")
+    # Check if required job files exist
+    job_files = ["job_parameters_generation.json", "job_LUT_auto_download.json"]
+    missing_files = [f for f in job_files if not Path(f).exists()]
+    if missing_files:
+        print("❌ Required job files not found:")
+        for f in missing_files:
+            print(f"   - {f}")
         print("Please run this script from the GPULab directory.")
         return
     
     # Initialize and run
-    downloader = GPULabAutoDownloader()
-    success = downloader.run_complete_workflow()
+    processor = GPULabMultiParameterProcessor()
+    success = processor.run_complete_workflow()
     
     if success:
         print("\n🎊 All done! Happy researching with URENIMOD!")
     else:
         print("\n💔 Workflow had issues, but don't worry - we can troubleshoot!")
 
-def test_container_extraction():
-    """Test function to debug container ID extraction."""
-    downloader = GPULabAutoDownloader()
-    
-    print("🧪 Testing container ID extraction...")
-    
-    # Test with the job that has container KD7GYH5I
-    job_id = "a32cda61-8a62-44b5-bdda-3c2c6aabf5f8"
-    print(f"Testing with job ID: {job_id}")
-    
-    job_info = downloader.get_job_info(job_id)
-    print(f"Result: {job_info}")
-    
-    if 'container' in job_info and 'ssh_host' in job_info:
-        print(f"✅ SUCCESS: Container: {job_info['container']}, SSH Host: {job_info['ssh_host']}")
-        
-        # Test the SSH command construction
-        container = job_info['container']
-        ssh_host = job_info['ssh_host']
-        test_cmd = [
-            "ssh", 
-            "-i", downloader.cert_path,
-            "-o", f"ProxyCommand=ssh -i {downloader.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
-            "-o", "StrictHostKeyChecking=no",
-            f"{container}@{ssh_host}",
-            "echo 'SSH test successful'"
-        ]
-        downloader.print_ssh_command_debug(test_cmd)
-    else:
-        print(f"❌ FAILED: Missing container or SSH host info")
-        print(f"   Expected container: KD7GYH5I")
-        print(f"   Expected SSH host: 4c.gpulab.ilabt.imec.be")
-
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "test":
-            test_container_extraction()
-        elif sys.argv[1] == "--download-only":
-            # Download-only mode: find the most recent running job and try to download
-            downloader = GPULabAutoDownloader()
-            
-            # Get the most recent lookup job
-            cert_path = downloader.cert_path
-            project = downloader.project
-            
-            cmd = f'gpulab-cli --cert "{cert_path}" jobs'
-            
-            try:
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, 
-                                      encoding='utf-8', errors='replace', timeout=30)
-                
-                if result.returncode == 0:
-                    lines = result.stdout.split('\n')
-                    lookup_jobs = []
-                    
-                    for line in lines:
-                        if 'lookup_table' in line and 'rsegawau@ila' in line:
-                            parts = line.split()
-                            if len(parts) >= 8:
-                                job_id = parts[0]
-                                name = parts[1]
-                                status = parts[-1]
-                                lookup_jobs.append((job_id, name, status))
-                    
-                    if lookup_jobs:
-                        # Use the most recent job
-                        job_id, name, status = lookup_jobs[0]
-                        print(f"🎯 Attempting download from job: {job_id[:8]} ({name})")
-                        print(f"   Status: {status}")
-                        
-                        success = downloader.download_via_scp(job_id)
-                        if success:
-                            print("🎉 Download completed successfully!")
-                        else:
-                            print("❌ Download failed")
-                    else:
-                        print("❌ No lookup jobs found")
-                else:
-                    print("❌ Could not get job list")
-            except Exception as e:
-                print(f"❌ Error: {e}")
-        else:
-            print("Usage: python gpulab_lookup_download_singlejob.py [--download-only | test]")
-    else:
-        main()
+    main()

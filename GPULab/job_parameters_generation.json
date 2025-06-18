@@ -1,0 +1,27 @@
+{
+  "name": "csv_generation",
+  "description": "Generate CSV parameters file for lookup table generation",
+  "request": {
+    "resources": {
+      "cpus": 16,
+      "gpus": 0,
+      "cpuMemoryGb": 32,
+      "clusterId": 6
+    },
+    "docker": {
+      "image": "python:3.12-slim",
+      "command": "bash -c 'apt-get update && apt-get install -y git python3-tk && pip install numpy scipy matplotlib pandas && mkdir -p /project_ghent/rsegawa && cd /project_ghent/rsegawa && echo \"Cloning repository...\" && rm -rf URENIMOD-lookups && git clone https://github.com/whizzkid-ox/URENIMOD-lookups.git && cd URENIMOD-lookups && echo \"Running CSV generation...\" && python /project_ghent/rsegawa/URENIMOD-lookups/lookup_parameters_csv.py && echo \"CSV generation completed!\" && echo \"Generated CSV file:\" && find /project_ghent/rsegawa/URENIMOD-lookups/params_csv -name \"lookup_parameters_*.csv\" -type f && sleep 60'",
+      "storage": [
+        {
+          "containerPath": "/project_ghent"
+        }
+      ],      "environment": {
+        "PYTHONPATH": "/project_ghent/rsegawa/URENIMOD-lookups",
+        "GITHUB_REPO": "https://github.com/whizzkid-ox/URENIMOD-lookups.git"
+      }
+    },
+    "scheduling": {
+      "interactive": false
+    }
+  }
+}

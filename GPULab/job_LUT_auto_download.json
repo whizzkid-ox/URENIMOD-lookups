@@ -1,0 +1,28 @@
+{
+  "name": "lookup_table_with_auto_download",
+  "description": "Generate lookup tables for NME fiber simulation with automatic download to local OneDrive folder",
+  "request": {
+    "resources": {
+      "cpus": 4,
+      "gpus": 0,
+      "cpuMemoryGb": 8,
+      "clusterId": 6
+    },
+    "docker": {
+      "image": "python:3.12-slim",
+      "command": "bash -c 'apt-get update && apt-get install -y git python3-tk build-essential cmake openssh-server && pip install neuron numpy scipy matplotlib tqdm colorlog lockfile pandas multiprocess boltons && cd /project_ghent/rsegawa && echo \"Installing PySONIC...\" && rm -rf PySONIC && git clone https://github.com/tjjlemaire/PySONIC.git && cd PySONIC && pip install -e . && cd .. && echo \"Installing MorphoSONIC...\" && rm -rf MorphoSONIC && git clone https://github.com/tjjlemaire/MorphoSONIC.git && cd MorphoSONIC && pip install -e . && echo \"Compiling NEURON mechanisms...\" && cd MorphoSONIC/nmodl && nrnivmodl && cd ../.. && echo \"MorphoSONIC installation completed.\" && echo \"Starting lookup generation...\" && cd /project_ghent/rsegawa/URENIMOD-lookups && python run_lookups.py -fiber_length 1e-3 -fiber_diameter 1e-6 -membrane_thickness 1.4e-9 -freq 1e6 -amp 1e6 -charge -65.0 && echo \"Lookup generation completed successfully!\" && echo \"\" && echo \"=== VERIFYING GENERATED FILES ===\" && LOOKUP_DIR=$(find /project_ghent/rsegawa/URENIMOD-lookups -name \"*unmyelinated_fiber_*\" -type d | head -1) && echo \"Generated files in: $LOOKUP_DIR\" && ls -la \"$LOOKUP_DIR\"/*.pkl && echo \"\" && echo \"=== JOB COMPLETION SUMMARY ===\" && echo \"[OK] Lookup tables generated successfully\" && echo \"[OK] Files available at: $LOOKUP_DIR\" && echo \"[OK] Ready for download\" && echo \"\" && echo \"=== KEEPING CONTAINER ALIVE FOR DOWNLOAD ===\" && echo \"Container will remain active for 30 minutes for file retrieval\" && echo \"Access via SSH: gpulab-cli --cert [cert] ssh [job-id]\" && echo \"Download via SFTP: gpulab-cli --cert [cert] sftp [job-id] --sftp\" && sleep 1800'",
+      "storage": [
+        {
+          "containerPath": "/project_ghent"
+        }
+      ],
+      "environment": {
+        "PYTHONPATH": "/project_ghent/rsegawa",
+        "GITHUB_REPO": "https://github.com/whizzkid-ox/URENIMOD-lookups.git"
+      }
+    },
+    "scheduling": {
+      "interactive": false
+    }
+  }
+}

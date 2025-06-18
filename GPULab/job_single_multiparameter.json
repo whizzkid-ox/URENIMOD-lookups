@@ -1,0 +1,31 @@
+{
+  "name": "multiparameter_lookup",
+  "description": "Generate lookup tables for all parameter combinations in single efficient job",
+  "request": {
+    "resources": {
+      "cpus": 32,
+      "gpus": 0,
+      "cpuMemoryGb": 96,
+      "clusterId": 6
+    },
+    "docker": {
+      "image": "python:3.12-slim",
+      "command": [
+        "bash", "-c",
+        "apt-get update && apt-get install -y git python3-tk build-essential cmake openssh-server && pip install neuron numpy scipy matplotlib tqdm colorlog lockfile pandas multiprocess boltons && cd /project_ghent/rsegawa && echo 'Installing PySONIC...' && rm -rf PySONIC && git clone https://github.com/tjjlemaire/PySONIC.git && cd PySONIC && pip install -e . && cd .. && echo 'Installing MorphoSONIC...' && rm -rf MorphoSONIC && git clone https://github.com/tjjlemaire/MorphoSONIC.git && cd MorphoSONIC && pip install -e . && echo 'Compiling NEURON mechanisms...' && cd MorphoSONIC/nmodl && nrnivmodl && cd ../.. && echo 'MorphoSONIC installation completed.' && echo 'Starting multi-parameter lookup generation...' && cd /project_ghent/rsegawa/URENIMOD-lookups && python3 -c \"import pandas as pd; import subprocess; from datetime import datetime; today = datetime.now().strftime('%Y%m%d'); csv_path = f'/project_ghent/rsegawa/URENIMOD-lookups/params_csv/lookup_parameters_{today}.csv'; print('Loading CSV...'); df = pd.read_csv(csv_path); print(f'Found {len(df)} combinations'); successful = 0; [successful := successful + (1 if subprocess.run(['python', 'run_lookups.py', '-fiber_length', str(row['fiber_length']), '-fiber_diameter', str(row['fiber_diameter']), '-membrane_thickness', str(row['membrane_thickness']), '-freq', str(row['freq']), '-amp', str(row['amp']), '-charge', str(row['charge'])], capture_output=True, timeout=1800).returncode == 0 else 0) or print(f'Set {idx+1}/{len(df)} done') for idx, (_, row) in enumerate(df.iterrows())]; print(f'Completed: {successful}/{len(df)}')\" && echo 'Multi-parameter lookup generation completed!' && find /project_ghent/rsegawa/URENIMOD-lookups -name '*.pkl' -type f | head -20 && echo 'Ready for download' && sleep 1800"
+      ],
+      "storage": [
+        {
+          "containerPath": "/project_ghent"
+        }
+      ],
+      "environment": {
+        "PYTHONPATH": "/project_ghent/rsegawa",
+        "GITHUB_REPO": "https://github.com/whizzkid-ox/URENIMOD-lookups.git"
+      }
+    },
+    "scheduling": {
+      "interactive": false
+    }
+  }
+}
