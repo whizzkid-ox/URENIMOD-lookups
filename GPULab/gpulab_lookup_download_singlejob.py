@@ -31,7 +31,7 @@ class GPULabAutoDownloader:
         self.cert_path = "C:\\Users\\rsegawa\\login_ilabt_imec_be_rsegawa@ugent.be.pem"
         self.project = "urenimod"
         self.download_dir = "C:\\Users\\rsegawa\\OneDrive - UGent\\URENIMOD-data"
-        self.job_file = "gpulab_lookup_singlejob.json"        # Ensure download directory exists
+        self.job_file = "gpulab_lookup_with_auto_download.json"        # Ensure download directory exists
         Path(self.download_dir).mkdir(parents=True, exist_ok=True)
         
     def submit_job(self):
@@ -502,8 +502,7 @@ class GPULabAutoDownloader:
                     "No pkl files found",  # Our custom message
                     "No such file or directory",  # Standard shell error
                     "cannot access",  # Another common error
-                ]
-                
+                ]                
                 has_pkl_files = (stdout_clean and 
                                not any(indicator in result.stdout for indicator in no_files_indicators) and
                                ".pkl" in result.stdout)
@@ -516,17 +515,21 @@ class GPULabAutoDownloader:
                     if search_result.returncode == 0 and search_result.stdout.strip():
                         print(f"🎯 Found pickle files elsewhere:")
                         print(search_result.stdout)
-                        # Use the first file found for download
-                        first_file = search_result.stdout.strip().split('\n')[0]
-                        pkl_files = [first_file]
-                        print(f"📥 Will download: {first_file}")
+                        # Store full paths for alternative files
+                        found_files = search_result.stdout.strip().split('\n')
+                        pkl_files = []
+                        for full_path in found_files:
+                            if full_path.strip():                                # Store as tuple: (full_path, filename)
+                                filename = full_path.split('/')[-1]
+                                pkl_files.append((full_path, filename))
+                                print(f"📥 Will download: {filename} from {full_path}")
                     else:
                         print("❌ No pickle files found anywhere")
                         return False
                 else:
                     print("📁 Available files:")
                     print(result.stdout)
-                      # Extract filenames from ls output
+                      # Extract filenames from ls output (these are regular files, just filenames)
                     pkl_files = []
                     for line in result.stdout.split('\n'):
                         if '.pkl' in line and not line.startswith('total'):
@@ -537,7 +540,8 @@ class GPULabAutoDownloader:
                                 # Just store the filename, not the full path since we already have remote_dir
                                 if '/' in filename:
                                     filename = filename.split('/')[-1]  # Get just the filename part
-                                pkl_files.append(filename)
+                                # Store as tuple: (None, filename) - None means use remote_dir
+                                pkl_files.append((None, filename))
                     
                     if not pkl_files:
                         print("❌ No pickle files detected in listing")
@@ -552,16 +556,27 @@ class GPULabAutoDownloader:
             print(f"❌ SSH check failed: {e}")
             return False
           # Download each pickle file using SCP
-        downloaded_count = 0
-        
-        for pkl_file in pkl_files:
-            print(f"\n📥 Downloading: {pkl_file}")
-              # Construct the full remote path
-            remote_path = f"{remote_dir}/{pkl_file}"
-            local_path = local_lookup_dir / pkl_file
+        downloaded_count = 0        
+        for pkl_item in pkl_files:
+            # Handle both tuple format (full_path, filename) and string format
+            if isinstance(pkl_item, tuple):
+                full_path, filename = pkl_item
+                if full_path:  # Alternative location - use full path
+                    remote_path = full_path
+                else:  # Regular location - use remote_dir + filename
+                    remote_path = f"{remote_dir}/{filename}"
+                local_filename = filename
+            else:
+                # Legacy string format
+                remote_path = f"{remote_dir}/{pkl_item}"
+                local_filename = pkl_item
             
-            scp_cmd = [
-                "scp",
+            print(f"\n📥 Downloading: {local_filename}")
+            print(f"   Remote path: {remote_path}")
+            
+            local_path = local_lookup_dir / local_filename
+            
+            scp_cmd = [                "scp",
                 "-i", self.cert_path,
                 "-o", f"ProxyCommand=ssh -i {self.cert_path} fffrsegawau@bastion.ilabt.imec.be -W %h:%p",
                 "-o", "StrictHostKeyChecking=no",
@@ -574,7 +589,7 @@ class GPULabAutoDownloader:
                 
                 if result.returncode == 0 and local_path.exists():
                     file_size = local_path.stat().st_size
-                    print(f"✅ Downloaded: {pkl_file} ({file_size} bytes)")
+                    print(f"✅ Downloaded: {local_filename} ({file_size} bytes)")
                     
                     # Verify the pickle file
                     try:
@@ -588,14 +603,14 @@ class GPULabAutoDownloader:
                         downloaded_count += 1  # Still count it as downloaded
                 
                 else:
-                    print(f"❌ Failed to download {pkl_file}")
+                    print(f"❌ Failed to download {local_filename}")
                     if result.stderr:
                         print(f"   Error: {result.stderr}")
                         
             except subprocess.TimeoutExpired:
-                print(f"⏰ Download of {pkl_file} timed out")
+                print(f"⏰ Download of {local_filename} timed out")
             except Exception as e:
-                print(f"❌ Error downloading {pkl_file}: {e}")
+                print(f"❌ Error downloading {local_filename}: {e}")
         
         if downloaded_count > 0:
             print(f"\n🎉 Successfully downloaded {downloaded_count} file(s) to:")
@@ -837,7 +852,54 @@ def test_container_extraction():
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test_container_extraction()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "test":
+            test_container_extraction()
+        elif sys.argv[1] == "--download-only":
+            # Download-only mode: find the most recent running job and try to download
+            downloader = GPULabAutoDownloader()
+            
+            # Get the most recent lookup job
+            cert_path = downloader.cert_path
+            project = downloader.project
+            
+            cmd = f'gpulab-cli --cert "{cert_path}" jobs'
+            
+            try:
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, 
+                                      encoding='utf-8', errors='replace', timeout=30)
+                
+                if result.returncode == 0:
+                    lines = result.stdout.split('\n')
+                    lookup_jobs = []
+                    
+                    for line in lines:
+                        if 'lookup_table' in line and 'rsegawau@ila' in line:
+                            parts = line.split()
+                            if len(parts) >= 8:
+                                job_id = parts[0]
+                                name = parts[1]
+                                status = parts[-1]
+                                lookup_jobs.append((job_id, name, status))
+                    
+                    if lookup_jobs:
+                        # Use the most recent job
+                        job_id, name, status = lookup_jobs[0]
+                        print(f"🎯 Attempting download from job: {job_id[:8]} ({name})")
+                        print(f"   Status: {status}")
+                        
+                        success = downloader.download_via_scp(job_id)
+                        if success:
+                            print("🎉 Download completed successfully!")
+                        else:
+                            print("❌ Download failed")
+                    else:
+                        print("❌ No lookup jobs found")
+                else:
+                    print("❌ Could not get job list")
+            except Exception as e:
+                print(f"❌ Error: {e}")
+        else:
+            print("Usage: python gpulab_lookup_download_singlejob.py [--download-only | test]")
     else:
         main()

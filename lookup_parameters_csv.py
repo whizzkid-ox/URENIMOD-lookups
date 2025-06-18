@@ -1,12 +1,12 @@
 # Author: Ryo Segawa (whizznihil.kid@gmail.com)
 
 """
-Generate CSV file with parameter combinations for HPC lookup table generation.
+Generate CSV file with parameter combinations for lookup table generation.
 The script automatically saves the output file in a 'params_csv' directory
 created next to this script.
 
 Output file:
-    <script_location>/params_csv/hpc_lookup_parameters_YYYYMMDD.csv
+    <script_location>/params_csv/lookup_parameters_YYYYMMDD.csv
 """
 
 import os
@@ -53,7 +53,7 @@ def main():
     
     # Generate filename with today's date
     today = datetime.now().strftime("%Y%m%d")
-    filename = f"hpc_lookup_parameters_{today}.csv"
+    filename = f"lookup_parameters_{today}.csv"
     output_path = os.path.join(output_dir, filename)
     
     # Generate parameters and save to CSV
